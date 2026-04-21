@@ -1,0 +1,233 @@
+# Architecture: arXiv Research Agent
+
+## What this system does
+
+You type one command with a paper title. The system finds the paper on arXiv, downloads it, pulls out the parts that matter, and produces a structured markdown file that teaches you to read and interrogate the paper the way a rigorous PhD researcher would.
+
+---
+
+## System Overview
+
+```
+User types:  /arxiv-agent "Attention is All You Need"
+                          │
+                          ▼
+            ┌─────────────────────────┐
+            │   SKILL.md              │  ← Claude Code reads this
+            │   (skill instructions)  │     and follows the steps
+            └──────────┬──────────────┘
+                       │  Step 1: run the downloader
+                       ▼
+            ┌─────────────────────────┐
+            │   arxiv_downloader.py   │  ← Python script
+            │                         │
+            │  • Search arXiv API     │
+            │  • Show top 3 results   │
+            │  • User confirms paper  │
+            │  • Download PDF         │
+            │  • Extract key sections │
+            │  • Save extracted text  │
+            └──────────┬──────────────┘
+                       │  Returns: PDF path, text path, title, slug
+                       ▼
+            ┌─────────────────────────┐
+            │   Claude (in-session)   │  ← No API key needed
+            │                         │
+            │  • Read extracted text  │
+            │  • Generate paper*.md   │
+            │    using output schema  │
+            └──────────┬──────────────┘
+                       │
+                       ▼
+            papers/paper_<slug>.md   ← the output
+```
+
+---
+
+## Components
+
+### 1. `arxiv_downloader.py`
+
+**Role:** Handles everything mechanical — finding, downloading, and extracting the paper. Claude never touches the PDF directly.
+
+**Input:** A paper title string or arXiv ID (e.g. `"1706.03762"`) passed as a CLI argument.
+
+**Logic flow:**
+```
+Input
+  │
+  ├── Looks like arXiv ID? (regex: \d{4}\.\d{4,5})
+  │     └── Fetch directly via arXiv API
+  │
+  └── Otherwise: title search
+        └── Return top 3 results → user picks 1/2/3 or cancels
+                │
+                ▼
+          PDF already in ./papers/?
+          ├── Yes → skip download
+          └── No  → download via arxiv library
+                │
+                ▼
+          extracted text already in ./papers/?
+          ├── Yes → skip extraction
+          └── No  → extract key sections via pdfplumber
+                      (Abstract, Introduction, Related Work,
+                       Method, Experiments, Conclusion)
+                      Skip: References, Appendix, Acknowledgements
+                │
+                ▼
+          Print to stdout:
+            PDF: ./papers/<arxiv_id>.pdf
+            TEXT: ./papers/<arxiv_id>_extracted.txt
+            TITLE: <title>
+            SLUG: <slugified_title>
+```
+
+**Key design decisions:**
+- Outputs paths to stdout so Claude can parse them without file system guessing
+- Skips re-download and re-extraction if files exist — idempotent by design
+- Section filtering happens at the line level using heading keyword matching, not page ranges — works across different paper layouts
+- Extracted text file includes metadata header (title, authors, year, arXiv ID, venue, abstract) before the body — Claude gets full context in one read
+
+**Dependencies:** `arxiv` (search + download), `pdfplumber` (PDF text extraction)
+
+---
+
+### 2. `.agents/skills/arxiv-agent/SKILL.md`
+
+**Role:** Instructions that tell Claude Code exactly what to do when `/arxiv-agent` is invoked. Claude reads this file and executes the steps using its built-in tools (Bash, Read, Write).
+
+**What it instructs Claude to do:**
+
+| Step | Action | Tool used |
+|------|--------|-----------|
+| 1 | Run `arxiv_downloader.py` with user's argument | Bash |
+| 2 | Parse stdout for PDF path, text path, title, slug | (in-context parsing) |
+| 3 | Check if `papers/paper_<slug>.md` exists | Read or Bash |
+| 4 | If exists: ask user — skip / regenerate / append | (user prompt) |
+| 5 | Read the extracted text file | Read |
+| 6 | Generate `paper_<slug>.md` per the output schema | Write |
+
+**Why a SKILL.md instead of a script:** The analysis step (generating the paper*.md) requires intelligence — understanding context, making judgments about what's important, writing in a specific pedagogical style. That's Claude's job, not a script's job. The SKILL.md is the interface between the mechanical (script) and the intelligent (Claude).
+
+---
+
+### 3. `papers/` directory
+
+**Role:** Single location for all artifacts. PDF, extracted text, and the generated analysis all share the same arXiv ID prefix, making them easy to correlate.
+
+```
+papers/
+├── 1706.03762.pdf                           ← raw PDF (downloaded)
+├── 1706.03762_extracted.txt                 ← key sections only (generated by script)
+└── paper_attention_is_all_you_need.md       ← analysis (generated by Claude)
+```
+
+**Naming convention:**
+- PDFs and extracted text use the arXiv ID — unambiguous, permanent
+- Analysis `.md` uses the slugified title — human-readable at a glance
+
+---
+
+### 4. `CLAUDE.md`
+
+**Role:** Project documentation for anyone (including Claude in a fresh session) to understand what this project does and how to use it. Also the setup guide for installing dependencies.
+
+---
+
+### 5. `.claude/settings.json`
+
+**Role:** Registers the `arxiv-agent` skill with Claude Code so `/arxiv-agent` becomes a usable slash command in this project directory.
+
+```json
+{
+  "skills": [".agents/skills/arxiv-agent"]
+}
+```
+
+---
+
+## Data Flow: What Moves Where
+
+```
+arXiv API
+    │  (search results + PDF download)
+    ▼
+arxiv_downloader.py
+    │  (extracted section text)
+    ▼
+papers/<id>_extracted.txt
+    │  (file contents read into Claude's context)
+    ▼
+Claude (in-session, no API key)
+    │  (structured markdown written to disk)
+    ▼
+papers/paper_<slug>.md
+```
+
+No data ever leaves your machine except the outbound requests to the arXiv API.
+
+---
+
+## The Output Schema (`paper*.md`)
+
+The generated file follows a fixed arc — reader's journey order, not paper order. Each section is a question (trains the interrogative habit). Two thinking layers per section:
+
+```
+Section header (a question)
+  │
+  ├── Substantive content
+  │     └── > Researcher's Move: (inline reasoning callout)
+  │
+  └── ### Think Like a Researcher
+        └── 2-3 prompts you answer yourself
+```
+
+**Sections in order:**
+
+```
+1. What problem is this solving, and why now?        ← field context, gap
+2. What is the core claim?                           ← hypothesis vs. implementation
+3. How does the method work?                         ← intuition + annotated equations
+4. What do the results actually prove?               ← evidence vs. claim
+5. What does it do well, and what's unresolved?      ← critical evaluation
+6. Where does this live in the field?                ← positioning, lineage
+7. What questions does it leave open?                ← research directions
+8. How would you re-implement this?                  ← reproducibility, underspecified details
+9. Key Terms to Own                                  ← glossary with intuition-first definitions
+```
+
+---
+
+## Dependency Map
+
+```
+/arxiv-agent (slash command)
+    └── requires: .claude/settings.json  (skill registration)
+    └── reads:    .agents/skills/arxiv-agent/SKILL.md
+
+SKILL.md
+    └── runs:     arxiv_downloader.py  (via Bash tool)
+    └── reads:    papers/<id>_extracted.txt  (via Read tool)
+    └── writes:   papers/paper_<slug>.md  (via Write tool)
+
+arxiv_downloader.py
+    └── requires: pip install arxiv pdfplumber
+    └── writes:   papers/<id>.pdf
+    └── writes:   papers/<id>_extracted.txt
+```
+
+---
+
+## Extension Points
+
+If you want to extend this system later, here's where each type of change belongs:
+
+| What you want to change | Where to change it |
+|-------------------------|--------------------|
+| Add/remove output sections | `SKILL.md` — output schema |
+| Change section style or tone | `SKILL.md` — output schema |
+| Support a new paper source (Semantic Scholar, PDF URL) | `arxiv_downloader.py` |
+| Change section extraction logic | `arxiv_downloader.py` — `extract_key_sections()` |
+| Change file naming convention | `arxiv_downloader.py` — `slugify()` + `download_and_extract()` |
+| Add a post-processing step (e.g. export to Notion) | New skill or extend `SKILL.md` Step 6 |
