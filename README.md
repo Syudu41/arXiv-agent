@@ -39,6 +39,8 @@ Every section includes inline **Researcher's Move** callouts (naming the reasoni
 ```bash
 pip install arxiv pdfplumber
 ```
+> [!CAUTION]
+> Claude Code works on Claude PRO or beyond subscription! 
 
 No API key needed — analysis runs in your current Claude Code session.
 
