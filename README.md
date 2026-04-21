@@ -4,8 +4,14 @@ A Claude Code skill that downloads arXiv papers and generates structured reading
 
 ## How it works
 
+Useage: 
 ```
-/arxiv-agent "Attention is All You Need"
+/arxiv-agent "Attention is All You Need"  
+```
+
+You can also use via DOI like (for more accuracy) -
+```
+/arxiv-agent "1706.03762"  
 ```
 
 1. Searches arXiv, shows top 3 matches, you confirm
