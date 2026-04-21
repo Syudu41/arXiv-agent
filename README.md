@@ -1,6 +1,9 @@
 # arXiv Research Agent
+> [!IMPORTANT]
+> **Work in Progress:** This repository is in an alpha state. Please do not use this in production yet.
 
-A Claude Code skill that downloads arXiv papers and generates structured reading guides for first-year PhD students — not summaries, but worked examples of how a rigorous researcher interrogates a paper.
+
+A Claude Code skill that downloads arXiv papers and generates structured reading guides for first-year PhD students - not summaries, but worked examples of how a rigorous researcher interrogates a paper. 
 
 ## How it works
 
